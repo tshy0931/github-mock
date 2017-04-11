@@ -39,31 +39,31 @@ class Worker extends Actor{
       msg.latch.countDown()
     }
     case msg:CreateLinks => {
+      val neighbors:List[String] = Redis.getRandomItems("users", msg.count)
       msg.linkType match {
-        case t: Follower => 
-          val ids:List[String] = Redis.getRandomItems("users", msg.count)
-          ids foreach {
-            id => Redis.addLinks("user", id, "following", List(id))
-          }
-          Redis.addLinks("user", msg.id, "followers", ids)
-          
-        case t: Starred =>
-          val ids:List[String] = Redis.getRandomItems("users", msg.count)
-          val repos:List[String] = ids flatMap {
-            //TODO: only pick 1 repo per user, extend to random repo counts
-            id => { 
-              val repos = getReposOfUser(id, 3)
-              repos match {
-                case rps:List[String] => rps foreach {
-                  repo => Redis.addLinks("repo", repo, "stargazers", List(id))
-                }
-                case _ => log.error(s"SRANDMEMBER returned illegal result for user:$id:repos")
+        case t: Follower =>       
+          Redis.bulkExec(
+            msg.userIds flatMap {
+              id => {
+                (neighbors map {
+                  id => () => Redis.sadd(s"user:$id:following", id)
+                }).::(() => Redis.sadd(s"user:$id:followers", neighbors))
               }
-              repos
             }
-          }
-          Redis.addLinks("user", msg.id, "starred", repos)
-
+          )      
+        case t: Starred =>
+          Redis.bulkExec(
+            msg.userIds flatMap {
+              id => {
+                val repos = getReposOfUser(id.toString, 3)
+                val addStargazersCommands = repos map {
+                  repo => () => Redis.sadd(s"repo:$repo:stargazers", id)
+                }
+                val addStarredCommand = () => Redis.sadd(s"user:$id:starred", repos)
+                addStarredCommand :: addStargazersCommands
+              }
+            }
+          )
         case t: Subscription => 
           ???
       }

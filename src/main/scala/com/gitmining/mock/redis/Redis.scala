@@ -9,8 +9,9 @@ object Redis {
   import scala.concurrent.Await
   import scala.concurrent.duration._
   
-  private lazy val clients = new RedisClientPool("localhost",6379)
-  
+  private val REDIS_DB_INDEX = 7
+  private lazy val clients = new RedisClientPool("localhost",6379, database=REDIS_DB_INDEX)
+
   val addItems = (itemType:String, items:Seq[Any]) => {
     sadd(itemType, items)
   }
@@ -43,10 +44,15 @@ object Redis {
     }
   }
   
-  val sadd = (key:String, values:Seq[Any]) => {
+  val flushDB = () => {
+    clients.withClient(_.flushdb)
+  }
+  
+  val sadd = (key:String, values:Any) => {
     clients.withClient {
       client => values match {
         case x :: xs => client.sadd(key, x, xs:_*)
+        case x => client.sadd(key, x)
       }
     }
   }

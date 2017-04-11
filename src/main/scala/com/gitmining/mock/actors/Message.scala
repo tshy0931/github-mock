@@ -7,10 +7,11 @@ trait Message {
   
 }
 case class Terminate() extends Message
+case class Cleanup() extends Message
 case class IdRange(start:Int, end:Int) extends Message
 case class CreateUsers(users:Seq[Int], prefix:String, latch:CountDownLatch) extends Message
 case class CreateRepos(userIds:Seq[Int], count:Int, prefix:String, latch:CountDownLatch) extends Message
-case class CreateLinks(id:String, count:Int, linkType:LinkType) extends Message
+case class CreateLinks(userIds:Seq[Int], count:Int, linkType:LinkType, latch:CountDownLatch) extends Message
 
 trait LinkType {
   val name:String
