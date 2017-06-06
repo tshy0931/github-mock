@@ -1,56 +1,101 @@
 package com.gitmining.mock.actors
 
-import akka.actor.{Actor,Props,ActorSystem,PoisonPill}
-import akka.routing.{ActorRefRoutee, RoundRobinRoutingLogic, Router, FromConfig}
+import akka.actor.{Actor, ActorRef, PoisonPill, Props, Terminated}
 import akka.event.Logging
 
 import scala.concurrent.Future
-import scala.concurrent.forkjoin._
+import scala.util.{Failure, Success}
 import scala.concurrent.ExecutionContext.Implicits.global
-import java.util.concurrent.CountDownLatch
 
-class Manager(start:Int, end:Int, workerCount:Int) extends Actor{
+import akka.routing.RoundRobinPool
+import akka.routing.Broadcast
+
+
+object Manager {
+  case object Terminate extends Message
+  case object Cleanup extends Message
+  case object Done extends Message
+  case class IdRange(start:Int, end:Int) extends Message
+}
+
+class Manager extends Actor{
+
   val log = Logging(context.system, this)
-  val workers = context.actorOf(FromConfig.props(Props[Worker]), "router1")
-  val GROUP_SIZE = 1000
-  val rand = scala.util.Random
-  val LINK_TYPES:Seq[LinkType] = Seq(Follower(),Starred())
+  val workers:ActorRef = context.actorOf(RoundRobinPool(10).props(Props[Worker]), "router1")
+  context watch workers
+  val GROUP_SIZE = 100
+  val LINK_TYPES:Seq[LinkType] = Seq(Follower,Starred,Subscription)
+
+  import com.gitmining.mock.actors.Manager._
+  import com.gitmining.mock.actors.Worker._
   
   def receive = {
-    case msg: IdRange => 
+    case IdRange(start, end) => 
       val fullList = (start to end).toList
       val groups = fullList.grouped(GROUP_SIZE).toList
-      val groupCount = (end-start+1)/GROUP_SIZE+1
+      val groupCount = groups.size
       val futureCreateUsers = Future {
         val latch = Utils.getCountDownLatch(groupCount)
-         groups foreach {
+        groups foreach {
           subList => {
             workers ! CreateUsers(subList, "user", latch)
           }
         }
         latch.await()
+        println(s"Created ${end - start + 1} users")
       }
       val futureCreateRepos = futureCreateUsers map {
         done => {
           val latch = Utils.getCountDownLatch(groupCount)
           groups foreach {
-            subList => workers ! CreateRepos(subList, rand.nextInt(32), "repo_", latch)
+            subList => workers ! CreateRepos(subList, 32, latch)
           }
           latch.await()
+          println(s"Created repos")
         }
       }
-      futureCreateRepos onSuccess {
-        case _ => {
+      val futureCreateLinks = futureCreateRepos map {
+        done => {
           val latch = Utils.getCountDownLatch(groupCount)
           groups foreach {
             subList => LINK_TYPES foreach {
-              linkType => workers ! CreateLinks(subList, rand.nextInt(32), linkType, latch)
+              linkType => workers ! CreateLinks(subList, 8, linkType, latch)
             }    
           }
           latch.await()
+          println(s"Created links")
         }
       }
-    case msg: Cleanup => com.gitmining.mock.redis.Redis.flushDB()
-    case msg: Terminate => workers ! PoisonPill
+      val futurePersist = futureCreateLinks map {
+        done => {
+          val latch = Utils.getCountDownLatch(groupCount)
+          groups foreach {
+            subList => workers ! Persist(subList, latch)
+          }
+          latch.await()
+          println("Data Persisted")
+        }
+      }
+      val done = futurePersist onComplete {
+        case Success(x) =>
+          self ! Terminate
+        case Failure(e) =>
+          self ! Terminate
+      }
+      
+    case Cleanup => 
+      com.gitmining.mock.redis.Redis.flushDB()
+      sender ! "Clean up done."
+    case Terminate => 
+      println("Shutting down worker pool")
+      workers ! Broadcast(PoisonPill)
+      
+    case Terminated(actor) =>
+      if(actor == workers){
+        log.info("worker pool terminated, shutting down actor system")
+        Utils.actorSystem.terminate()
+      }else{
+        log.info(s"Actor ${actor.path} terminated")
+      }
   }
 }

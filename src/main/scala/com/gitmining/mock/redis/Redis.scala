@@ -2,7 +2,6 @@ package com.gitmining.mock.redis
 
 object Redis {
 
-  import com.gitmining.mock.actors.LinkType
   import com.redis._
   import com.gitmining.mock.models.Item
   import java.util.concurrent.CountDownLatch
@@ -22,7 +21,7 @@ object Redis {
   
   val getRandomItems = (itemType:String, count:Int) => {
     clients.withClient {
-      client => client.srandmember(itemType, count)
+      client => client.srandmember(itemType, count).get.flatten
     }
   }
 
@@ -33,7 +32,7 @@ object Redis {
     clients.withClient {
       client => {
         val result = client.pipelineNoMulti(commands)
-        result map {p => Await.result(p.future, 2 minutes)}
+        result map {p => Await.result(p.future, 60 minutes)}
       }
     }
   }
@@ -56,6 +55,28 @@ object Redis {
       }
     }
   }
-  
 
+  val smembers = (key:String) => {
+    clients.withClient {
+      _.smembers(key).get.flatten
+    }
+  }
+  
+  val hmset = (key:String, map:Map[String,Any]) => {
+    clients.withClient {
+      client => if(client.hmset(key, map)) Some(1L) else None
+    }
+  }
+
+  val hmget = (key:String, field:String) => {
+    clients.withClient {
+      _.hmget(key, field).get.get(field).getOrElse("")
+    }
+  }
+
+  val hgetall = (key:String) => {
+    clients.withClient {
+      _.hgetall1(key) getOrElse Map[String,String]()
+    }
+  }
 }

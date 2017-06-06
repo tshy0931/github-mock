@@ -6,13 +6,13 @@ import java.util.concurrent.CountDownLatch
 
 object Utils {
   
-  lazy val actorSystem = ActorSystem("github-mock_Actor_System")
-  
-  val getActorSystem = () => actorSystem
-  
+  val actorSystem = ActorSystem("github-mock")
+    
   val getManager = actorSystem.actorOf(Props[Manager], "github-mock-manager")
   
   val getCountDownLatch = (count:Int) => {
     new CountDownLatch(count)
   }
+
+  implicit lazy val random = scala.util.Random
 }
