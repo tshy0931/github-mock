@@ -70,7 +70,7 @@ object Redis {
 
   val hmget = (key:String, field:String) => {
     clients.withClient {
-      _.hmget(key, field).get.get(field).getOrElse("")
+      _.hmget(key, field).get.getOrElse(field,"")
     }
   }
 

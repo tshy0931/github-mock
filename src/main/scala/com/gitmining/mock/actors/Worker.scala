@@ -7,7 +7,7 @@ import java.util.concurrent.CountDownLatch
 import com.gitmining.mock.redis.Redis
 import java.util.concurrent.atomic.AtomicLong
 
-import com.gitmining.mock.models.{RandomAttributes, Repo, User}
+import com.gitmining.mock.models.{Link, RandomAttributes, Repo, User}
 import com.gitmining.mock.models.RandomAttributes._
 
 import scala.util.{Failure, Random, Success}
@@ -17,7 +17,7 @@ import java.time.format.DateTimeFormatter
 
 import com.gitmining.mock.dao.GitHubDatabase
 
-import scala.concurrent.{Await, Future}
+import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 
 object Worker {
@@ -109,12 +109,12 @@ object Worker {
     val commands = userIds flatMap {
       userId => {
         val neighbors:List[String] = Redis.getRandomItems("users", maxCount)
-        val repos:List[String] = (neighbors match {
+        val repos:List[String] = neighbors match {
           case Nil => Nil
-          case neighbors @ x :: xs => neighbors flatMap { neighbor =>
+          case neighbors@x :: xs => neighbors flatMap { neighbor =>
             Redis.getRandomItems(s"user:$neighbor:repos", maxCount)
           }
-        })
+        }
         repos match {
           case Nil => Nil
           case repos @ x :: xs =>
@@ -131,6 +131,28 @@ object Worker {
       }
     }
     if(commands!=Nil)Redis.bulkExec(commands)
+  }
+
+  val createRepoUserLinks = (userIds:Seq[Int], maxCount:Int, set1:String) => {
+    val commands = userIds flatMap { userId =>
+      val repoIds = Redis.smembers(s"user:$userId:repos")
+      repoIds map {repoId =>
+        val users = Redis.getRandomItems("users", maxCount)
+        () => Redis.sadd(s"repo:$repoId:$set1", users)
+      }
+    }
+    Redis.bulkExec(commands)
+  }
+
+  val createRepoRepoLinks = (userIds:Seq[Int], set1:String) => {
+    val commands = userIds flatMap { userId =>
+      val repoIds = Redis.smembers(s"user:$userId:repos")
+      repoIds filter {_ => Random.nextDouble() < 0.2} map {forkDst =>
+        val forkSrc = Redis.getRandomItems("repos", 1).head
+        () => Redis.sadd(s"repo:$forkSrc:$set1", forkDst)
+      }
+    }
+    Redis.bulkExec(commands)
   }
 
   private def randomDate(from: ZonedDateTime, to:ZonedDateTime): ZonedDateTime = {
@@ -156,7 +178,8 @@ class Worker extends Actor {
       val commands = userIds flatMap {
         userId => {
           val count = Random nextInt (maxCount+1)
-          val repos = List.tabulate(count)(i => uniqRepoId.getAndIncrement)
+          // use negative id for repos to avoid id conflict with user ids
+          val repos = List.tabulate(count)(i => -uniqRepoId.getAndIncrement)
           val cmd1 = repos match {
             case Nil => None
             case a @ x :: xs => Some(() => Redis.sadd(s"user:$userId:repos", a))
@@ -183,24 +206,45 @@ class Worker extends Actor {
           createUserRepoLinks(userIds, maxCount, "starred", Some("stargazers"))
         case Subscription => 
           createUserRepoLinks(userIds, maxCount, "subscriptions", Some("subscribers"))
+        case Assignee =>
+          createRepoUserLinks(userIds, maxCount, "assignees")
+        case Collaborator =>
+          createRepoUserLinks(userIds, maxCount, "collaborators")
+        case Contributor =>
+          createRepoUserLinks(userIds, maxCount, "contributors")
+        case Fork =>
+          createRepoRepoLinks(userIds, "forks")
+//        case Issue =>
+//          createRepoUserLinks(userIds, maxCount, "issues")
+
       }      
       latch.countDown()
 
     case Persist(userIds, latch) =>
       userIds foreach {
         userId => {
-          val userFuture = GitHubDatabase.store(User.of(userId))
-          val repoFutures = Redis.smembers(s"user:$userId:repos").toList map {
-            repoId => GitHubDatabase.store(Repo.of(repoId.toLong))
+          val user = User.of(userId)
+          val repos = Redis.smembers(s"user:$userId:repos") map {repoId => Repo.of(repoId.toLong)}
+          val userFuture = GitHubDatabase.store(user)
+          val repoFutures = repos map {GitHubDatabase.store(_)}
+          val userLinks =
+            user.following.map(Link("follows", userId, _, 1)) ++
+            user.starred.map(repoId => Link("stars", userId, repoId, 1)) ++
+            user.subscriptions.map(repoId => Link("subscribes", userId, repoId, 1)) ++
+            user.repos.map(repoId => Link("owns", userId, repoId, 1))
+          val repoLinks = repos flatMap { repo =>
+            repo.collaborators.map(Link("collaborates", _, repo.id, 1)) ++
+            repo.contributors.map(Link("contributes", _, repo.id, 1)) ++
+            repo.assignees.map(Link("assigns", _, repo.id, 1))
           }
-          Future.sequence(userFuture :: repoFutures).onComplete{
-            case Success(x) => println(x);latch.countDown()
+          val linkFutures = (userLinks ++ repoLinks) map {GitHubDatabase.store(_)}
+
+          Future.sequence(linkFutures ++ repoFutures + userFuture) onComplete {
+            case Success(x) => latch.countDown()
             case Failure(x) => println(x);latch.countDown()
           }
         }
       }
-
     case _ => log.error("Unknown message")
   }
-
 }

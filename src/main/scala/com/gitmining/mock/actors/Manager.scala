@@ -6,16 +6,16 @@ import akka.event.Logging
 import scala.concurrent.Future
 import scala.util.{Failure, Success}
 import scala.concurrent.ExecutionContext.Implicits.global
-
 import akka.routing.RoundRobinPool
 import akka.routing.Broadcast
+import com.gitmining.mock.dao.GitHubDatabase
 
 
 object Manager {
   case object Terminate extends Message
   case object Cleanup extends Message
   case object Done extends Message
-  case class IdRange(start:Int, end:Int) extends Message
+  case class IdRange(start:Int, end:Int, groupCount:Int) extends Message
 }
 
 class Manager extends Actor{
@@ -23,16 +23,17 @@ class Manager extends Actor{
   val log = Logging(context.system, this)
   val workers:ActorRef = context.actorOf(RoundRobinPool(10).props(Props[Worker]), "router1")
   context watch workers
-  val GROUP_SIZE = 100
-  val LINK_TYPES:Seq[LinkType] = Seq(Follower,Starred,Subscription)
+  val LINK_TYPES:Seq[LinkType] = Seq(
+    Follower,Starred,Subscription,Assignee,Collaborator,Contributor,Fork,Issue
+  )
 
   import com.gitmining.mock.actors.Manager._
   import com.gitmining.mock.actors.Worker._
   
   def receive = {
-    case IdRange(start, end) => 
+    case IdRange(start, end, groupSize) =>
       val fullList = (start to end).toList
-      val groups = fullList.grouped(GROUP_SIZE).toList
+      val groups = fullList.grouped(groupSize).toList
       val groupCount = groups.size
       val futureCreateUsers = Future {
         val latch = Utils.getCountDownLatch(groupCount)
@@ -48,7 +49,7 @@ class Manager extends Actor{
         done => {
           val latch = Utils.getCountDownLatch(groupCount)
           groups foreach {
-            subList => workers ! CreateRepos(subList, 32, latch)
+            subList => workers ! CreateRepos(subList, 8, latch)
           }
           latch.await()
           println(s"Created repos")
@@ -76,13 +77,13 @@ class Manager extends Actor{
           println("Data Persisted")
         }
       }
-      val done = futurePersist onComplete {
+      futurePersist onComplete {
         case Success(x) =>
           self ! Terminate
         case Failure(e) =>
           self ! Terminate
       }
-      
+
     case Cleanup => 
       com.gitmining.mock.redis.Redis.flushDB()
       sender ! "Clean up done."

@@ -12,11 +12,11 @@ abstract class Repos extends Table[Repos, Repo] {
 
   object id extends LongColumn with PartitionKey
   object name extends StringColumn
-  object ownerId extends IntColumn
+  object ownerId extends LongColumn
   object ownerName extends StringColumn
-  object orgId extends IntColumn
+  object orgId extends LongColumn
   object orgName extends StringColumn
-  object assignees extends SetColumn[Int]
+  object assignees extends SetColumn[Long]
   object language extends StringColumn
   object languages extends MapColumn[String,Long]
   object issues extends SetColumn[Long]
@@ -26,14 +26,14 @@ abstract class Repos extends Table[Repos, Repo] {
   object pushedAt extends StringColumn //DateTimeColumn
   object size extends LongColumn
   object networkCount extends IntColumn
-  object forks extends SetColumn[Int]
+  object forks extends SetColumn[Long]
   object forksCount extends IntColumn
-  object collaborators extends SetColumn[Int]
+  object collaborators extends SetColumn[Long]
   object collaboratorsCount extends IntColumn
-  object stargazers extends SetColumn[Int]
+  object stargazers extends SetColumn[Long]
   object starCount extends IntColumn
-  object contributors extends SetColumn[Int]
+  object contributors extends SetColumn[Long]
   object contributorsCount extends IntColumn
-  object subscribers extends SetColumn[Int]
+  object subscribers extends SetColumn[Long]
   object subscribersCount extends IntColumn
 }

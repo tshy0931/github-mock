@@ -12,8 +12,10 @@ object App {
     import akka.util.Timeout
     import scala.concurrent.duration._
     import scala.util.{Success, Failure}
-    
-    implicit val timeout = Timeout(10 seconds)
+
+    val userCount = args(0).toInt
+    val groupCount = args(1).toInt
+    implicit val timeout = Timeout(100 seconds)
     val manager = getManager
     GitHubDatabase.create()
     val future = manager ? Cleanup
@@ -21,9 +23,9 @@ object App {
       case Success(msg) => 
         println(msg)
         RandomAttributes.load
-        manager ! IdRange(1, 100000)
+        manager ! IdRange(1, userCount, groupCount)
       case Failure(e) => throw e
     }
-    
+
   }
 }
